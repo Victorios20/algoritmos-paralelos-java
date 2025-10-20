@@ -1,0 +1,19 @@
+# Build
+/build/
+/out/
+/target/
+/bin/
+/.gradle/
+/.mvn/
+
+# IDE
+.classpath
+.project
+.settings/
+.idea/
+.vscode/
+
+# SO / Logs
+*.class
+*.log
+hs_err_pid*
