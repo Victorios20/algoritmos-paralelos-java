@@ -77,23 +77,57 @@ public class ResultCharts extends JFrame {
     Integer n = (Integer) sizeBox.getSelectedItem();
     if (algo == null || ds == null || n == null) return;
 
-    // agrega por threads (média das amostras)
-    Map<Integer, List<Row>> byThreads = rows.stream()
-      .filter(r -> r.algoritmo.equals(algo) && r.dataset.equals(ds) && r.tamanho == n && r.versao.equals("parallel"))
-      .collect(Collectors.groupingBy(r -> r.threads));
+    // ----- Carrega summaries -----
+    // Mediana serial (threads=1)
+    Double serialMedian = rows.stream()
+      .filter(r -> r.algoritmo.equals(algo) && r.dataset.equals(ds) && r.tamanho == n && "serial-summary".equals(r.versao))
+      .map(r -> r.tempo_ms)
+      .findFirst().orElse(null);
 
-    java.util.List<Integer> xThreads = byThreads.keySet().stream().sorted().collect(Collectors.toList());
-    if (xThreads.isEmpty()) return;
+    // Medianas paralelas por threads (inclui 1 se nosso CSV tiver parallel-summary=1)
+    Map<Integer, Row> parSumm = rows.stream()
+      .filter(r -> r.algoritmo.equals(algo) && r.dataset.equals(ds) && r.tamanho == n && "parallel-summary".equals(r.versao))
+      .collect(Collectors.toMap(r -> r.threads, r -> r, (a,b)->a, TreeMap::new));
 
-    java.util.List<Double> yValues = new ArrayList<>();
-    boolean plotSpeedup = rbSpeedup.isSelected();
-    for (Integer th : xThreads) {
-      List<Row> rs = byThreads.get(th);
-      double v = rs.stream().mapToDouble(r -> plotSpeedup && r.speedup != null ? r.speedup : r.tempo_ms).average().orElse(Double.NaN);
-      yValues.add(v);
+    // Se não houver T=1 em parallel-summary, injeta a partir do serial-summary
+    if (!parSumm.containsKey(1) && serialMedian != null) {
+      Row fake = new Row();
+      fake.algoritmo = algo; fake.dataset = ds; fake.tamanho = n;
+      fake.versao = "parallel-summary"; fake.threads = 1; fake.amostra = 0;
+      fake.tempo_ms = serialMedian;
+      fake.speedup = 1.0; fake.eficiencia = 1.0;
+      parSumm.put(1, fake);
     }
 
-    // layout simples
+    if (parSumm.isEmpty()) return;
+
+    List<Integer> xThreads = new ArrayList<>(parSumm.keySet());
+    // Garante ordem e que 1 venha primeiro
+    Collections.sort(xThreads);
+
+    boolean plotSpeedup = rbSpeedup.isSelected();
+    List<Double> yValues = new ArrayList<>(xThreads.size());
+
+    for (Integer th : xThreads) {
+      Row r = parSumm.get(th);
+      if (plotSpeedup) {
+        // Preferir speedup do CSV; se ausente, calcular com serialMedian
+        double sp;
+        if (r.speedup != null) {
+          sp = r.speedup;
+        } else if (serialMedian != null && r.tempo_ms > 0) {
+          sp = serialMedian / r.tempo_ms;
+        } else {
+          sp = Double.NaN;
+        }
+        yValues.add(sp);
+      } else {
+        // Tempo(ms)
+        yValues.add(r.tempo_ms);
+      }
+    }
+
+    // ----- Layout -----
     int W = chartPanel.getWidth(), H = chartPanel.getHeight();
     int left = 80, right = 40, top = 40, bottom = 60;
     int w = W - left - right, h = H - top - bottom;
@@ -103,10 +137,9 @@ public class ResultCharts extends JFrame {
     g2.setColor(Color.black);
     g2.drawString(algo + " / " + ds + " / N=" + n + (plotSpeedup ? "  (Speedup)" : "  (Tempo ms)"), left, 20);
 
-    // eixo
-    double maxY = yValues.stream().mapToDouble(Double::doubleValue).max().orElse(1.0);
+    // eixo Y
+    double maxY = yValues.stream().filter(d -> !Double.isNaN(d)).mapToDouble(Double::doubleValue).max().orElse(1.0);
     if (maxY <= 0) maxY = 1.0;
-    // um pouco de margem
     maxY *= 1.1;
 
     g2.drawLine(left, H - bottom, left, top);
@@ -120,18 +153,20 @@ public class ResultCharts extends JFrame {
       g2.drawLine(left, y, W - right, y);
     }
 
-    // eixo Y labels
+    // labels Y
     g2.setColor(Color.black);
     for (int i=0;i<=grid;i++){
       double val = (i*maxY/grid);
       int y = (int)(H - bottom - (i*(h/(double)grid)));
-      g2.drawString(String.format(Locale.US, "%.2f", val), 10, y+5);
+      g2.drawString(String.format(java.util.Locale.US, "%.2f", val), 10, y+5);
     }
 
-    // desenhar barras/linha
+    // ----- Desenho -----
     int npts = xThreads.size();
-    if (plotSpeedup) {
-      // barras
+    if (npts == 1) return;
+
+    if (rbSpeedup.isSelected()) {
+      // Barras
       int barW = Math.max(20, (int)(w/(npts*1.5)));
       int gap = (w - npts*barW) / Math.max(1, npts+1);
       int x = left + gap;
@@ -148,7 +183,7 @@ public class ResultCharts extends JFrame {
         x += barW + gap;
       }
     } else {
-      // linha
+      // Linha
       g2.setColor(new Color(80,140,240));
       int prevX = -1, prevY = -1;
       for (int i=0;i<npts;i++){

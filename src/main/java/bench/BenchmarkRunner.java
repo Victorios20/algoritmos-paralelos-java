@@ -16,16 +16,15 @@ import java.util.Locale;
 public final class BenchmarkRunner {
 
   // ===== Configuração dos testes =====
-  private static final String[] ALGOS   = {"Insertion","Counting","Merge","Quick"};
-  private static final String[] DATASETS= {"random","reversed","nearly","dupes"};
-  private static final int[] SIZES      = {10_000, 50_000, 100_000};      // ajuste se quiser
-  private static final int[] THREADS    = {2, 4, 8};                       // paralelismo testado
-  private static final int WARMUPS      = 3;                               // execuções não medidas
-  private static final int SAMPLES      = 5;                               // execuções medidas
-  private static final boolean ENABLE_PARALLEL_INSERTION = true;           // ligar/desligar Insertion paralelo
+  private static final String[] ALGOS    = {"Insertion","Counting","Merge","Quick"};
+  private static final String[] DATASETS = {"random","reversed","nearly","dupes"};
+  private static final int[] SIZES       = {10_000, 50_000, 100_000};
+  private static final int[] THREADS     = {2, 4, 8};
+  private static final int WARMUPS       = 3;
+  private static final int SAMPLES       = 5;
+  private static final boolean ENABLE_PARALLEL_INSERTION = true;
 
   public static void runAllToCsv(String csvPath) throws Exception {
-    // overwrite (não acumula resultados antigos)
     try (CsvWriter csv = new CsvWriter(csvPath, header(), /*append=*/false)) {
 
       // baseline: mediana serial por (algo,dataset,size)
@@ -59,9 +58,12 @@ public final class BenchmarkRunner {
               csv.writeRow(row(algo, "serial", ds, n, 1, s, ms, "", "", ok ? "" : "NOT_SORTED"));
             }
             Arrays.sort(tSerial);
-            double med = tSerial[tSerial.length / 2];
-            serialMedian.put(key(algo, ds, n), med);
-            csv.writeRow(row(algo, "serial-summary", ds, n, 1, 0, med, "", "", "median"));
+            double medSerial = tSerial[tSerial.length / 2];
+            serialMedian.put(key(algo, ds, n), medSerial);
+            csv.writeRow(row(algo, "serial-summary", ds, n, 1, 0, medSerial, "", "", "median"));
+
+            // ✅ também escrevemos um summary como se fosse parallel(threads=1)
+            csv.writeRow(row(algo, "parallel-summary", ds, n, 1, 0, medSerial, "1.000", "1.000", "median-serial-as-threads1"));
 
             // ---------- PARALELO ----------
             for (int th : THREADS) {
@@ -72,6 +74,7 @@ public final class BenchmarkRunner {
               }
 
               // amostras paralelas
+              double[] tPar = new double[SAMPLES];
               for (int s = 1; s <= SAMPLES; s++) {
                 int[] base = makeData(ds, n);
                 int[] a = Arrays.copyOf(base, base.length);
@@ -82,6 +85,7 @@ public final class BenchmarkRunner {
 
                 boolean ok = DataSetFactory.isSorted(a);
                 double ms = Timer.ms(t0, t1);
+                tPar[s - 1] = ms;
 
                 Double baseMed = serialMedian.get(key(algo, ds, n));
                 String speedup    = baseMed != null ? fmt(baseMed / ms) : "";
@@ -89,6 +93,13 @@ public final class BenchmarkRunner {
 
                 csv.writeRow(row(algo, "parallel", ds, n, th, s, ms, speedup, eficiencia, ok ? "" : "NOT_SORTED"));
               }
+
+              // summary paralelo (mediana por threads)
+              Arrays.sort(tPar);
+              double medPar = tPar[tPar.length / 2];
+              String spMed  = fmt(medSerial / medPar);
+              String efMed  = fmt((medSerial / medPar) / th);
+              csv.writeRow(row(algo, "parallel-summary", ds, n, th, 0, medPar, spMed, efMed, "median"));
             }
           }
         }
@@ -109,7 +120,8 @@ public final class BenchmarkRunner {
     r.add(alg); r.add(ver); r.add(ds);
     r.add(Integer.toString(n)); r.add(Integer.toString(th));
     r.add(Integer.toString(sample)); r.add(fmt(ms));
-    r.add(sp); r.add(ef);
+    r.add(sp == null ? "" : sp);
+    r.add(ef == null ? "" : ef);
     r.add(obs == null ? "" : obs);
     return r;
   }
